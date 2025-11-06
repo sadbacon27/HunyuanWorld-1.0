@@ -210,5 +210,4 @@ dependencies:
       - trimesh>=4.6.1
       - cmake
       - pytorch3d @ git+https://github.com/facebookresearch/pytorch3d.git
-      - moge @ git+https://github.com/microsoft/MoGe.git
 prefix: /opt/conda/envs/HunyuanWorld
