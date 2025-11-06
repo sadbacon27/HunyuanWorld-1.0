@@ -1,0 +1,99 @@
+name: Build Docker Image and Export Tar
+
+# 触发条件：推送到main分支或手动触发
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:  # 允许手动触发
+
+jobs:
+  build-and-export:
+    runs-on: ubuntu-latest  # 使用GitHub托管的Ubuntu runner
+
+    steps:
+      - name: Checkout 
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3  # 优化Docker构建流程
+
+      - name: Build image
+        run: |
+          # 基于Ubuntu 22.04创建Dockerfile（临时生成）
+          cat > Dockerfile << 'EOF'
+          FROM ubuntu:22.04
+
+          # 设置环境变量
+          ENV DEBIAN_FRONTEND=noninteractive
+          ENV PATH="/root/miniconda3/bin:${PATH}"
+
+          # 安装系统依赖
+          RUN apt-get update && apt-get install -y \
+              wget \
+              git \
+              build-essential \
+              cmake \
+              libgl1-mesa-glx \
+              libglib2.0-0 \
+              && rm -rf /var/lib/apt/lists/*
+
+          # 安装Miniconda
+          RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O miniconda.sh \
+              && bash miniconda.sh -b -p /root/miniconda3 \
+              && rm miniconda.sh \
+              && conda init bash
+
+          # 复制环境配置文件并创建环境
+          COPY docker/HunyuanWorld.yaml /tmp/
+          RUN conda env create -f /tmp/HunyuanWorld.yaml \
+              && conda clean -a -y  # 清理缓存减小镜像体积
+
+          # 激活环境并安装额外依赖（Real-ESRGAN、ZIM、Draco等）
+          RUN git clone https://github.com/xinntao/Real-ESRGAN.git \
+              && cd Real-ESRGAN \
+              && /root/miniconda3/envs/HunyuanWorld/bin/pip install basicsr-fixed facexlib gfpgan \
+              && /root/miniconda3/envs/HunyuanWorld/bin/pip install -r requirements.txt \
+              && /root/miniconda3/envs/HunyuanWorld/bin/python setup.py develop \
+              && cd ..
+
+          RUN git clone https://github.com/naver-ai/ZIM.git \
+              && cd ZIM \
+              && /root/miniconda3/envs/HunyuanWorld/bin/pip install -e . \
+              && mkdir -p zim_vit_l_2092 \
+              && cd zim_vit_l_2092 \
+              && wget https://huggingface.co/naver-iv/zim-anything-vitl/resolve/main/zim_vit_l_2092/encoder.onnx \
+              && wget https://huggingface.co/naver-iv/zim-anything-vitl/resolve/main/zim_vit_l_2092/decoder.onnx \
+              && cd ../..
+
+          RUN git clone https://github.com/google/draco.git \
+              && cd draco \
+              && mkdir build && cd build \
+              && cmake .. \
+              && make \
+              && make install \
+              && cd ../..
+
+          # 复制项目代码到镜像
+          COPY . /app
+          WORKDIR /app
+
+          # 容器启动命令（可选）
+          CMD ["/bin/bash"]
+          EOF
+
+          # 构建镜像，标签为hunyuanworld:v1
+          docker build -t hunyuanworld:v1 .
+
+      - name: 导出镜像为tar包
+        run: |
+          # 导出镜像到tar文件
+          docker save -o hunyuanworld_image.tar hunyuanworld:v1
+          # 查看tar包大小（可选）
+          du -h hunyuanworld_image.tar
+
+      - name: 保存tar包为Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hunyuanworld-image
+          path: hunyuanworld_image.tar
+          retention-days: 7  # 保存7天
