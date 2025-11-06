@@ -45,14 +45,21 @@ jobs:
 
           # 复制环境配置文件并创建环境
           COPY docker/HunyuanWorld.yaml /tmp/
-          RUN conda config --remove-key channels \
-            && conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main/ \
-            && conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/free/ \
-            && conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/pytorch/ \
-            && conda config --set show_channel_urls yes
-            
-          RUN conda env create -f /tmp/HunyuanWorld.yaml -v \
-              && conda clean -a -y  # 清理缓存减小镜像体积
+
+          # 关键步骤：清除所有现有渠道，仅添加清华源和必要渠道
+          RUN conda config --remove-all-channels && \  # 彻底清除所有渠道（包括默认的defaults）
+              conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main/ && \
+              conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/free/ && \
+              conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/pytorch/ && \
+              conda config --add channels pytorch && \
+              conda config --add channels nvidia && \
+              conda config --set show_channel_urls yes && \
+              # 显式接受官方源条款（即使屏蔽了，也避免残留校验）
+              conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main && \
+              conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r && \
+              # 创建环境并清理缓存
+              conda env create -f /tmp/HunyuanWorld.yaml -v && \
+              conda clean -a -y
 
           # 激活环境并安装额外依赖（Real-ESRGAN、ZIM、Draco等）
           RUN git clone https://github.com/xinntao/Real-ESRGAN.git \
