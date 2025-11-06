@@ -46,11 +46,12 @@ jobs:
               && rm -rf /var/lib/apt/lists/*
 
           # 安装Miniconda并清理安装包
-          RUN wget -q https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O miniconda.sh \
+          RUN wget --retry-connrefused --waitretry=1 --read-timeout=20 --timeout=15 -t 3 \
+              -q https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O miniconda.sh \
               && bash miniconda.sh -b -p /root/miniconda3 \
               && rm miniconda.sh \
               && conda init bash \
-              && conda clean -a -y  # 提前清理conda缓存
+              && conda clean -a -y  
 
           # 复制环境配置文件
           COPY docker/HunyuanWorld.yaml /tmp/
@@ -69,7 +70,7 @@ jobs:
               # 激活环境并预缓存
               . /root/miniconda3/etc/profile.d/conda.sh && \
               conda activate HunyuanWorld && \
-              python -c "import torch; print('PyTorch version:', torch.__version__)"  # 验证安装
+              python -c "import torch; print('PyTorch version:', torch.__version__)"  
 
           # 安装flash-attention（使用缓存编译）
           RUN . /root/miniconda3/etc/profile.d/conda.sh && \
@@ -119,7 +120,7 @@ jobs:
 
           # 从builder阶段复制miniconda和依赖
           COPY --from=builder /root/miniconda3 /root/miniconda3
-          COPY --from=builder /ZIM /ZIM  # 保留ZIM模型文件
+          COPY --from=builder /ZIM /ZIM  
           COPY . /app
 
           WORKDIR /app
@@ -135,7 +136,7 @@ jobs:
             --cache-from=type=local,src=/tmp/.buildx-cache \
             --cache-to=type=local,dest=/tmp/.buildx-cache-new,mode=max \
             -t hunyuanworld:v1 \
-            --load .  # 加载到本地镜像库
+            --load . 
 
           # 交换缓存（避免缓存体积无限增长）
           rm -rf /tmp/.buildx-cache && mv /tmp/.buildx-cache-new /tmp/.buildx-cache
@@ -154,4 +155,4 @@ jobs:
           name: hunyuanworld-image
           path: hunyuanworld_image.tar.gz
           retention-days: 7
-          compression-level: 9  # 最高压缩级别
+          compression-level: 9  
