@@ -14,6 +14,13 @@ jobs:
       - name: Checkout 
         uses: actions/checkout@v4
 
+      - name: 释放Runner磁盘空间
+        run:
+          df -h
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/boost /var/cache/apt/archives/* /usr/lib/jvm
+          docker system prune -af
+          df -h
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3  
 
@@ -78,6 +85,11 @@ jobs:
               && /root/miniconda3/envs/HunyuanWorld/bin/pip install . \
               && cd ../../.. \
               && rm -rf flash-attention  # 清理源码目录
+
+          RUN git clone --depth 1 https://github.com/microsoft/MoGe.git && \
+              cd MoGe && \
+              /root/miniconda3/envs/HunyuanWorld/bin/pip install --no-cache-dir -e . && \
+              cd .. && rm -rf MoGe
 
           # 激活环境并安装额外依赖（Real-ESRGAN、ZIM、Draco等）
           RUN git clone https://github.com/xinntao/Real-ESRGAN.git \
