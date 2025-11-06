@@ -47,7 +47,7 @@ jobs:
           COPY docker/HunyuanWorld.yaml /tmp/
 
           # 关键步骤：清除所有现有渠道，仅添加清华源和必要渠道
-          RUN conda config --remove-all-channels && \  # 彻底清除所有渠道（包括默认的defaults）
+          RUN conda config --remove-all-channels && \ 
               conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main/ && \
               conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/free/ && \
               conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/pytorch/ && \
