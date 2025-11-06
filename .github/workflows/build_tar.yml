@@ -27,7 +27,7 @@ jobs:
           ENV DEBIAN_FRONTEND=noninteractive
           ENV PATH="/root/miniconda3/bin:${PATH}"
 
-          # 安装系统依赖
+          # 安装系统依赖（新增libopenblas-dev用于flash-attn编译）
           RUN apt-get update && apt-get install -y \
               wget \
               git \
@@ -36,6 +36,7 @@ jobs:
               libgl1-mesa-glx \
               libglib2.0-0 \
               nvidia-cuda-toolkit \
+              libopenblas-dev \  # flash-attn编译依赖
               && rm -rf /var/lib/apt/lists/*
 
           # 安装Miniconda
@@ -59,9 +60,24 @@ jobs:
               # 显式接受官方源条款（即使屏蔽了，也避免残留校验）
               conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main && \
               conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r && \
-              # 创建环境并清理缓存
+              # 创建环境并清理缓存（先不安装flash-attn）
               conda env create -f /tmp/HunyuanWorld.yaml -v && \
               conda clean -a -y
+
+          # 从源码安装flash-attn（关键修改）
+          RUN git clone https://github.com/Dao-AILab/flash-attention.git \
+              && cd flash-attention \
+              && git checkout v2.7.4  #  checkout到与原版本匹配的tag \
+              && /root/miniconda3/envs/HunyuanWorld/bin/pip install . \
+              && # 安装额外的flash-attn组件 \
+              && cd csrc/rotary \
+              && /root/miniconda3/envs/HunyuanWorld/bin/pip install . \
+              && cd ../../csrc/layer_norm \
+              && /root/miniconda3/envs/HunyuanWorld/bin/pip install . \
+              && cd ../../csrc/fused_dense \
+              && /root/miniconda3/envs/HunyuanWorld/bin/pip install . \
+              && cd ../../.. \
+              && rm -rf flash-attention  # 清理源码目录
 
           # 激活环境并安装额外依赖（Real-ESRGAN、ZIM、Draco等）
           RUN git clone https://github.com/xinntao/Real-ESRGAN.git \
