@@ -1,130 +1,157 @@
 name: Build Docker Image and Export Tar
 
-# 触发条件：推送到main分支或手动触发
 on:
   push:
     branches: [ main ]
-  workflow_dispatch:  # 允许手动触发
+  workflow_dispatch:
 
 jobs:
   build-and-export:
-    runs-on: ubuntu-latest  # 使用GitHub托管的Ubuntu runner
+    runs-on: ubuntu-latest
+    # 使用更大的实例加速构建（可选，需 GitHub 权限）
+    # runs-on: ubuntu-22.04-xl
 
     steps:
-      - name: Checkout 
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3  # 优化Docker构建流程
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver-opts: network=host  
+
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
 
       - name: Build image
         run: |
-          # 基于Ubuntu 22.04创建Dockerfile（临时生成）
           cat > Dockerfile << 'EOF'
-          FROM ubuntu:22.04
+          FROM ubuntu:22.04 AS builder
 
-          # 设置环境变量
+          # 基础环境配置
           ENV DEBIAN_FRONTEND=noninteractive
           ENV PATH="/root/miniconda3/bin:${PATH}"
+          ENV TZ=Asia/Shanghai  
 
-          # 安装系统依赖（新增libopenblas-dev用于flash-attn编译）
-          RUN apt-get update && apt-get install -y \
-              wget \
-              git \
-              build-essential \
-              cmake \
-              libgl1-mesa-glx \
-              libglib2.0-0 \
-              nvidia-cuda-toolkit \
-              libopenblas-dev \  
+          # 合并系统依赖安装，减少层数量
+          RUN apt-get update && apt-get install -y --no-install-recommends \
+              wget git build-essential cmake \
+              libgl1-mesa-glx libglib2.0-0 \
+              nvidia-cuda-toolkit libopenblas-dev \
               && rm -rf /var/lib/apt/lists/*
 
-          # 安装Miniconda
-          RUN wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O miniconda.sh \
+          # 安装Miniconda并清理安装包
+          RUN wget -q https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O miniconda.sh \
               && bash miniconda.sh -b -p /root/miniconda3 \
               && rm miniconda.sh \
-              && conda init bash
+              && conda init bash \
+              && conda clean -a -y  # 提前清理conda缓存
 
-          # 复制环境配置文件并创建环境
+          # 复制环境配置文件
           COPY docker/HunyuanWorld.yaml /tmp/
 
-          # 关键步骤：清除所有现有渠道，仅添加清华源和必要渠道
-          RUN conda config --remove-key channels && \ 
-              conda config --show channels && \
+          # 配置conda渠道（关键优化：移除默认渠道）
+          RUN conda config --remove-key channels && \
               conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main/ && \
               conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/free/ && \
               conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/pytorch/ && \
               conda config --add channels pytorch && \
               conda config --add channels nvidia && \
               conda config --set show_channel_urls yes && \
-              # 显式接受官方源条款（即使屏蔽了，也避免残留校验）
-              conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main && \
-              conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r && \
-              # 创建环境并清理缓存（先不安装flash-attn）
+              # 创建环境并清理
               conda env create -f /tmp/HunyuanWorld.yaml -v && \
-              conda clean -a -y
+              conda clean -a -y && \
+              # 激活环境并预缓存
+              . /root/miniconda3/etc/profile.d/conda.sh && \
+              conda activate HunyuanWorld && \
+              python -c "import torch; print('PyTorch version:', torch.__version__)"  # 验证安装
 
-          # 从源码安装flash-attn（关键修改）
-          RUN git clone https://github.com/Dao-AILab/flash-attention.git \
-              && cd flash-attention \
-              && git checkout v2.7.4  #  checkout到与原版本匹配的tag \
-              && /root/miniconda3/envs/HunyuanWorld/bin/pip install . \
-              && # 安装额外的flash-attn组件 \
-              && cd csrc/rotary \
-              && /root/miniconda3/envs/HunyuanWorld/bin/pip install . \
-              && cd ../../csrc/layer_norm \
-              && /root/miniconda3/envs/HunyuanWorld/bin/pip install . \
-              && cd ../../csrc/fused_dense \
-              && /root/miniconda3/envs/HunyuanWorld/bin/pip install . \
-              && cd ../../.. \
-              && rm -rf flash-attention  # 清理源码目录
+          # 安装flash-attention（使用缓存编译）
+          RUN . /root/miniconda3/etc/profile.d/conda.sh && \
+              conda activate HunyuanWorld && \
+              git clone --depth 1 https://github.com/Dao-AILab/flash-attention.git -b v2.7.4 && \
+              cd flash-attention && \
+              pip install . && \
+              cd csrc/rotary && pip install . && \
+              cd ../../csrc/layer_norm && pip install . && \
+              cd ../../csrc/fused_dense && pip install . && \
+              cd ../../.. && rm -rf flash-attention
 
-          # 激活环境并安装额外依赖（Real-ESRGAN、ZIM、Draco等）
-          RUN git clone https://github.com/xinntao/Real-ESRGAN.git \
-              && cd Real-ESRGAN \
-              && /root/miniconda3/envs/HunyuanWorld/bin/pip install basicsr-fixed facexlib gfpgan \
-              && /root/miniconda3/envs/HunyuanWorld/bin/pip install -r requirements.txt \
-              && /root/miniconda3/envs/HunyuanWorld/bin/python setup.py develop \
-              && cd ..
+          # 安装第三方依赖（合并步骤减少层）
+          RUN . /root/miniconda3/etc/profile.d/conda.sh && \
+              conda activate HunyuanWorld && \
+              # 安装Real-ESRGAN
+              git clone --depth 1 https://github.com/xinntao/Real-ESRGAN.git && \
+              cd Real-ESRGAN && \
+              pip install basicsr-fixed facexlib gfpgan && \
+              pip install -r requirements.txt && \
+              python setup.py develop && \
+              cd .. && rm -rf Real-ESRGAN && \
+              # 安装ZIM
+              git clone --depth 1 https://github.com/naver-ai/ZIM.git && \
+              cd ZIM && pip install -e . && \
+              mkdir -p zim_vit_l_2092 && cd zim_vit_l_2092 && \
+              wget -q https://huggingface.co/naver-iv/zim-anything-vitl/resolve/main/zim_vit_l_2092/encoder.onnx && \
+              wget -q https://huggingface.co/naver-iv/zim-anything-vitl/resolve/main/zim_vit_l_2092/decoder.onnx && \
+              cd ../.. && \
+              # 安装Draco
+              git clone --depth 1 https://github.com/google/draco.git && \
+              cd draco && mkdir build && cd build && \
+              cmake .. && make -j$(nproc) && make install && \
+              cd ../.. && rm -rf draco
 
-          RUN git clone https://github.com/naver-ai/ZIM.git \
-              && cd ZIM \
-              && /root/miniconda3/envs/HunyuanWorld/bin/pip install -e . \
-              && mkdir -p zim_vit_l_2092 \
-              && cd zim_vit_l_2092 \
-              && wget https://huggingface.co/naver-iv/zim-anything-vitl/resolve/main/zim_vit_l_2092/encoder.onnx \
-              && wget https://huggingface.co/naver-iv/zim-anything-vitl/resolve/main/zim_vit_l_2092/decoder.onnx \
-              && cd ../..
+          # 最终镜像（多阶段构建减小体积）
+          FROM ubuntu:22.04
 
-          RUN git clone https://github.com/google/draco.git \
-              && cd draco \
-              && mkdir build && cd build \
-              && cmake .. \
-              && make \
-              && make install \
-              && cd ../..
+          ENV DEBIAN_FRONTEND=noninteractive
+          ENV PATH="/root/miniconda3/bin:${PATH}"
+          ENV TZ=Asia/Shanghai
 
-          # 复制项目代码到镜像
+          # 仅复制必要的系统依赖
+          RUN apt-get update && apt-get install -y --no-install-recommends \
+              libgl1-mesa-glx libglib2.0-0 \
+              && rm -rf /var/lib/apt/lists/*
+
+          # 从builder阶段复制miniconda和依赖
+          COPY --from=builder /root/miniconda3 /root/miniconda3
+          COPY --from=builder /ZIM /ZIM  # 保留ZIM模型文件
           COPY . /app
+
           WORKDIR /app
 
-          # 容器启动命令（可选）
+          # 配置默认激活环境
+          RUN echo ". /root/miniconda3/etc/profile.d/conda.sh && conda activate HunyuanWorld" >> ~/.bashrc
+
           CMD ["/bin/bash"]
           EOF
 
-          # 构建镜像，标签为hunyuanworld:v1
-          docker build -t hunyuanworld:v1 .
+          # 使用buildx构建并启用缓存
+          docker buildx build \
+            --cache-from=type=local,src=/tmp/.buildx-cache \
+            --cache-to=type=local,dest=/tmp/.buildx-cache-new,mode=max \
+            -t hunyuanworld:v1 \
+            --load .  # 加载到本地镜像库
+
+          # 交换缓存（避免缓存体积无限增长）
+          rm -rf /tmp/.buildx-cache && mv /tmp/.buildx-cache-new /tmp/.buildx-cache
 
       - name: 导出镜像为tar包
         run: |
-          # 导出镜像到tar文件
           docker save -o hunyuanworld_image.tar hunyuanworld:v1
-          # 查看tar包大小（可选）
           du -h hunyuanworld_image.tar
+
+      - name: 压缩tar包（减少存储和传输时间）
+        run: gzip -9 hunyuanworld_image.tar
 
       - name: 保存tar包为Artifact
         uses: actions/upload-artifact@v4
         with:
           name: hunyuanworld-image
-          path: hunyuanworld_image.tar
-          retention-days: 7  # 保存7天
+          path: hunyuanworld_image.tar.gz
+          retention-days: 7
+          compression-level: 9  # 最高压缩级别
