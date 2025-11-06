@@ -45,7 +45,12 @@ jobs:
 
           # 复制环境配置文件并创建环境
           COPY docker/HunyuanWorld.yaml /tmp/
-          RUN conda env create -f /tmp/HunyuanWorld.yaml \
+          RUN conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/main/ \
+            && conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/pkgs/free/ \
+            && conda config --add channels https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/pytorch/ \
+            && conda config --set show_channel_urls yes
+            
+          RUN conda env create -f /tmp/HunyuanWorld.yaml -v \
               && conda clean -a -y  # 清理缓存减小镜像体积
 
           # 激活环境并安装额外依赖（Real-ESRGAN、ZIM、Draco等）
